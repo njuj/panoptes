@@ -132,8 +132,9 @@ class Engine:
         if a:
             a.count += 1
             a.last = ev.ts
+            a.title, a.detail = title, detail                # the latest picture (counts grow)
             if RANK[sev] < RANK[a.severity]:
-                a.severity, a.title, a.detail = sev, title, detail
+                a.severity = sev
                 self.new.append(a)
             return a
         a = Alert(sev, rule, title, detail, proc, ev.pid, target, ev.ts, ev.ts, technique=technique)

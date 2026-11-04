@@ -29,6 +29,10 @@ class Trap:
     def __init__(self, engine: Engine, policy: Policy, on_event=None, host: str = "127.0.0.1", port: int = 53):
         self.engine, self.policy, self.on_event = engine, policy, on_event or (lambda ev, alerts, action: None)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if sys.platform == "win32":
+            # Windows reports "connection reset" on a UDP socket when a client has gone before our reply reached it
+            # (an ICMP port-unreachable); for a server that is not an error, so switch it off
+            self.sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         self.sock.bind((host, port))
         self.address = self.sock.getsockname()
         self.lock = threading.Lock()
@@ -104,7 +108,7 @@ class Trap:
         while not self._stop and (until is None or time.time() < until):
             try:
                 data, client = self.sock.recvfrom(4096)
-            except socket.timeout:
+            except (socket.timeout, ConnectionResetError):
                 continue
             except OSError:
                 break
