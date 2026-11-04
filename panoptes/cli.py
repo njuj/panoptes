@@ -173,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         from . import windows
         live = windows.Live(include_existing=args.existing)
-        engine = Engine(dns_visible=live.dns)
+        from .trap import search_suffixes
+        engine = Engine(dns_visible=live.dns, local_suffixes=tuple(search_suffixes()))
         p = out.p
         if not args.json:
             print(p(f" panoptes v{__version__}", "1;36") + p("  ·  watching this machine  ·  Ctrl+C to stop", "2"))
@@ -198,7 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     host, _, port = args.listen.rpartition(":")
     policy = Policy("sinkhole" if args.sinkhole else "nxdomain" if args.nxdomain else "guard" if args.guard else "forward",
                     args.upstream, args.sinkhole or "127.0.0.1")
-    engine = Engine()
+    from .trap import search_suffixes
+    engine = Engine(local_suffixes=tuple(search_suffixes()))
 
     def on_event(ev, alerts, action):
         out.event(ev, action)

@@ -107,8 +107,9 @@ def public_ip(ip: str) -> bool:
 
 
 class Engine:
-    def __init__(self, *, dns_visible: bool = True):
+    def __init__(self, *, dns_visible: bool = True, local_suffixes: tuple[str, ...] = ()):
         self.dns_visible = dns_visible            # can we see lookups? (if not, "no lookup first" means nothing)
+        self.local = (".local", ".lan", ".arpa", ".home", ".internal", ".localdomain") + tuple("." + s for s in local_suffixes)
         self.alerts: dict[tuple, Alert] = {}
         self.ip_names: dict[str, str] = {}
         self.encoded: dict[str, set[str]] = defaultdict(set)        # base domain -> distinct encoded subdomains
@@ -154,7 +155,7 @@ class Engine:
     # ── DNS ──────────────────────────────────────────────────────────────────
     def _dns(self, ev: Dns):
         name = ev.name.lower().rstrip(".")
-        if not name or "." not in name or name.endswith((".local", ".lan", ".arpa", ".home", ".internal", ".localdomain")):
+        if not name or "." not in name or name.endswith(self.local):
             return
         for ip in ev.answers:
             self.ip_names[ip] = name
