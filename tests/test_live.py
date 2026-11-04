@@ -38,12 +38,14 @@ class Live(unittest.TestCase):
                                      "--save", str(saved), "--json"], cwd=ROOT, env=ENV, stdout=subprocess.PIPE, text=True,
                                     encoding="utf-8")
             time.sleep(2)
-            r = subprocess.run(["nslookup", "beacon-test.duckdns.org", "127.0.0.1"], capture_output=True, text=True)
+            # the trailing dot: a fully qualified name, so Windows appends none of the machine's search suffixes
+            r = subprocess.run(["nslookup", "beacon-test.duckdns.org.", "127.0.0.1"], capture_output=True, text=True)
             out, _ = trap.communicate(timeout=30)
-            self.assertIn("10.9.9.9", r.stdout)                       # the sinkholed answer reached nslookup
-            alerts = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
-            self.assertIn("dynamic-dns", {a["rule"] for a in alerts})
             events = [json.loads(l) for l in saved.read_text(encoding="utf-8").splitlines()]
+            seen = [e["name"] for e in events]
+            self.assertIn("10.9.9.9", r.stdout, seen)                 # the sinkholed answer reached nslookup
+            alerts = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
+            self.assertIn("dynamic-dns", {a["rule"] for a in alerts}, seen)
             asked = [e for e in events if e["name"] == "beacon-test.duckdns.org"]
             self.assertTrue(asked)
             self.assertTrue(asked[0]["process"].lower().endswith("nslookup.exe"), asked[0])
