@@ -14,6 +14,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from . import domains as D
+from . import tls as T
 
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
 RANK = {s: i for i, s in enumerate(SEVERITIES)}
@@ -36,6 +37,20 @@ class Conn:
     ip: str
     port: int
     proto: str = "tcp"
+    pid: int | None = None
+    process: str | None = None
+
+
+@dataclass
+class Tls:
+    """A TLS handshake seen in a capture: the name the client asked for, or the certificate the server sent."""
+    ts: float
+    ip: str                             # the server
+    port: int
+    sni: str | None = None
+    subject: str | None = None          # "CN=..., O=..." of the server's certificate (TLS 1.2 and older)
+    issuer: str | None = None
+    serial: int | None = None
     pid: int | None = None
     process: str | None = None
 
@@ -69,6 +84,14 @@ LOLBINS = {"powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.ex
            "certutil.exe", "bitsadmin.exe", "msbuild.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "cmstp.exe",
            "msiexec.exe", "hh.exe", "forfiles.exe", "wmic.exe", "curl.exe", "finger.exe"}
 CHAT_CLIENTS = {"telegram.exe", "ayugram.exe", "kotatogram.exe", "discord.exe", "discordptb.exe", "discordcanary.exe"}
+# public resolvers that answer DNS over HTTPS: a program using them resolves names out of sight of the system's DNS
+DOH_IPS = {"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112", "208.67.222.222", "208.67.220.220",
+           "94.140.14.14", "94.140.15.15", "45.90.28.0", "45.90.30.0", "2606:4700:4700::1111", "2606:4700:4700::1001",
+           "2001:4860:4860::8888", "2001:4860:4860::8844", "2620:fe::fe", "2620:fe::9"}
+DOH_NAMES = {"cloudflare-dns.com", "mozilla.cloudflare-dns.com", "chrome.cloudflare-dns.com", "one.one.one.one", "dns.google",
+             "dns.google.com", "dns.quad9.net", "dns9.quad9.net", "doh.opendns.com", "dns.adguard.com", "dns.adguard-dns.com",
+             "dns.nextdns.io", "doh.cleanbrowsing.org", "dns.cloudflare.com", "security.cloudflare-dns.com"}
+DOH_CLIENTS = {"svchost.exe", "warp-svc.exe", "dnscrypt-proxy.exe", "nextdns.exe"}   # Windows' own DoH and DNS clients
 BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "arc.exe", "iexplore.exe"}
 
 
@@ -148,6 +171,8 @@ class Engine:
         self.events += 1
         if isinstance(ev, Dns):
             self._dns(ev)
+        elif isinstance(ev, Tls):
+            self._tls(ev)
         else:
             self._conn(ev)
         return self.new
@@ -242,6 +267,8 @@ class Engine:
         if pname in LOLBINS and not trusted:
             self._raise("high", "lolbin", f"{pname} is talking to the internet",
                         f"to {target}: attackers use this built-in Windows program to download and run code", ev, target, "T1218")
+        if ev.ip in DOH_IPS and ev.port == 443:
+            self._doh(ev, ev.ip)
         if self.dns_visible and not name and ev.port not in (53, 853, 123, 3478, 19302) and pname not in BROWSERS:
             self._raise("medium" if odd_location(ev.process) or pname in LOLBINS else "low", "direct-ip",
                         f"Connection to an address no lookup produced",
@@ -249,6 +276,31 @@ class Engine:
                         ev.ip, "T1071", key=("direct-ip", pname, ev.ip))
         if not trusted:
             self._contact(ev, f"conn:{name or ev.ip}:{ev.port}", target, "connections to")
+
+    # ── TLS (captures) ───────────────────────────────────────────────────────
+    def _tls(self, ev: Tls):
+        if ev.sni and not ev.subject:
+            # the name a client asked a server for: every name rule applies, even when the lookup itself was hidden
+            # (DNS over HTTPS) or happened before the capture started
+            self._dns(Dns(ev.ts, ev.sni, "A", [ev.ip] if public_ip(ev.ip) else [], pid=ev.pid, process=ev.process))
+            if ev.sni in DOH_NAMES:
+                self._doh(ev, ev.sni)
+        fam = T.family(ev.subject, ev.issuer, ev.serial)
+        if fam:
+            name = ev.sni or self.ip_names.get(ev.ip) or ev.ip
+            target = f"{name}:{ev.port}"
+            serial = f", serial {ev.serial}" if ev.serial == T.COBALT_STRIKE_SERIAL else ""
+            self._raise("critical", "rat-cert", f"{fam} server certificate on {target}",
+                        f"the server presented '{ev.subject}'{serial}: the certificate {fam} generates out of the box, so "
+                        f"this is almost certainly its controller", ev, target, "T1573.002", key=("rat-cert", target))
+
+    def _doh(self, ev, target):
+        pname = proc_name(ev.process)
+        if not pname or pname in BROWSERS or pname in DOH_CLIENTS:
+            return                                       # browsers use DoH on purpose; in a capture the program is unknown
+        self._raise("medium", "doh", f"DNS over HTTPS from {pname}",
+                    f"to {target}: a program that is not a browser resolving names inside HTTPS, out of sight of the DNS log, "
+                    f"the trap and DNS filtering", ev, target, "T1071.004", key=("doh", pname))
 
     def _contact(self, ev, key, target, verb):
         who = proc_name(ev.process) or (str(ev.pid) if ev.pid else "?")

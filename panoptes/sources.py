@@ -9,8 +9,8 @@ import struct
 from pathlib import Path
 from typing import Iterator
 
-from . import wire
-from .engine import Conn, Dns
+from . import tls, wire
+from .engine import Conn, Dns, Tls
 
 
 class SourceError(ValueError):
@@ -107,8 +107,48 @@ def _frames(path: Path) -> Iterator[tuple[float, int, bytes]]:
     raise SourceError(f"{path.name}: not a pcap or pcapng capture")
 
 
-def from_capture(path: Path) -> Iterator[Dns | Conn]:
+def _tls_segment(flows: dict, names: dict, ts: float, src: str, sport: int, dst: str, dport: int, seq: int,
+                 data: bytes) -> Iterator[Tls]:
+    """Follow one direction of a TCP connection through its TLS handshake, segments put back in order."""
+    key = (src, sport, dst, dport)
+    f = flows.get(key)
+    if f is None:
+        if key in flows or data[:1] != b"\x16" or data[1:2] != b"\x03":
+            flows[key] = None                          # not TLS, or the capture joined it mid-stream
+            return
+        f = flows[key] = [tls.Stream(), seq, {}]
+    stream, expect, early = f
+    if seq != expect:
+        if 0 < (seq - expect) & 0xFFFFFFFF < 1 << 20 and len(early) < 256:
+            early[seq] = data                          # arrived before a gap: keep it until the gap fills
+        return                                         # (or a retransmission of what we already have)
+    chunks = [data]
+    expect = (seq + len(data)) & 0xFFFFFFFF
+    while expect in early:
+        chunks.append(early.pop(expect))
+        expect = (expect + len(chunks[-1])) & 0xFFFFFFFF
+    f[1] = expect
+    for mtype, body in stream.feed(b"".join(chunks)):
+        if mtype == 1:                                 # ClientHello
+            name = names[key] = tls.sni(body)
+            stream.done = True
+            if name:
+                yield Tls(ts, dst, dport, sni=name)
+        elif mtype == 11:                              # the server's Certificate (TLS 1.2 and older)
+            stream.done = True
+            cert = tls.leaf_cert(body)
+            if cert:
+                yield Tls(ts, src, sport, sni=names.get((dst, dport, src, sport)), subject=tls.dn(cert.subject),
+                          issuer=tls.dn(cert.issuer), serial=cert.serial)
+    if stream.done:
+        flows[key] = None
+
+
+def from_capture(path: Path) -> Iterator[Dns | Conn | Tls]:
     pending: dict[tuple, tuple[float, str, str]] = {}
+    flows: dict[tuple, list | None] = {}
+    names: dict[tuple, str | None] = {}
+    syns: dict[tuple, Conn] = {}
     for ts, link, frame in _frames(path):
         pkt = _l3(link, frame)
         ip = _ip(pkt) if pkt else None
@@ -136,9 +176,16 @@ def from_capture(path: Path) -> Iterator[Dns | Conn]:
             sport, dport = struct.unpack_from("!HH", payload, 0)
             flags = payload[13]
             if flags & 0x02 and not flags & 0x10:                    # SYN without ACK: a new outbound connection
-                yield Conn(ts, dst, dport, "tcp")
+                syns[(src, sport, dst, dport)] = Conn(ts, dst, dport, "tcp")
+            data = payload[(payload[12] >> 4) * 4:]
+            if data:
+                yield from _tls_segment(flows, names, ts, src, sport, dst, dport, struct.unpack_from("!I", payload, 4)[0], data)
+                c = syns.pop((src, sport, dst, dport), None)
+                if c:
+                    yield c                                          # after its ClientHello, which may name it
     for (_, _, _), (ts, name, qtype) in pending.items():           # queries that never got an answer
         yield Dns(ts, name, qtype, [], "NOANSWER")
+    yield from sorted(syns.values(), key=lambda c: c.ts)            # connections that never sent data
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────
@@ -164,7 +211,7 @@ def from_jsonl(path: Path) -> Iterator[Dns | Conn]:
             continue
         d = json.loads(line)
         kind = d.pop("kind", "dns")
-        yield Dns(**d) if kind == "dns" else Conn(**d)
+        yield Dns(**d) if kind == "dns" else Tls(**d) if kind == "tls" else Conn(**d)
 
 
 def from_list(path: Path) -> Iterator[Dns]:

@@ -12,7 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import __version__
-from .engine import RANK, SEVERITIES, Alert, Conn, Dns, Engine, public_ip
+from .engine import RANK, SEVERITIES, Alert, Conn, Dns, Engine, Tls, public_ip
 
 LOCAL_SUFFIXES = (".home", ".lan", ".local", ".localdomain", ".internal", ".arpa")
 
@@ -44,7 +44,7 @@ class Out:
     def event(self, ev, action: str = ""):
         if self.save:
             d = asdict(ev)
-            d["kind"] = "dns" if isinstance(ev, Dns) else "conn"
+            d["kind"] = "dns" if isinstance(ev, Dns) else "tls" if isinstance(ev, Tls) else "conn"
             self.save.write(json.dumps(d) + "\n")
             self.save.flush()
         if not getattr(self.args, "verbose", False) or self.args.json:
@@ -55,7 +55,11 @@ class Out:
             return                                       # search-suffix and reverse lookups: noise, not traffic
         if isinstance(ev, Conn) and not public_ip(ev.ip):
             return
-        if isinstance(ev, Dns):
+        if isinstance(ev, Tls):
+            addr = f"[{ev.ip}]:{ev.port}" if ":" in ev.ip else f"{ev.ip}:{ev.port}"
+            what = f"certificate {ev.subject}" if ev.subject else f"hello {ev.sni}"
+            line = f"{p(self.clock(ev.ts), '2')}  {p('TLS ', '34')} {who:<22} {addr} {what}"
+        elif isinstance(ev, Dns):
             ans = ", ".join(ev.answers[:3]) + (" …" if len(ev.answers) > 3 else "") if ev.answers else ev.rcode
             line = f"{p(self.clock(ev.ts), '2')}  {p('DNS ', '36')} {who:<22} {ev.name} {p(ev.qtype, '2')} → {ans}"
         else:
@@ -88,10 +92,10 @@ class Out:
             print(p(" ✔ nothing suspicious seen", "1;32"))
             return
         for a in shown[:40]:
-            who = os.path.basename(a.process) if a.process else "-"
+            who = os.path.basename(a.process) if a.process else ""
             times = f"×{a.count}" if a.count > 1 else ""
-            print(f"   {p(f'{ICON[a.severity]} {a.severity.upper():<8}', COLOR[a.severity])} {a.title}  "
-                  f"{p(who, '36')} {p(times, '2')}")
+            print((f"   {p(f'{ICON[a.severity]} {a.severity.upper():<8}', COLOR[a.severity])} {a.title}  "
+                   f"{p(who, '36')} {p(times, '2')}").rstrip())
         counts = engine.summary()
         print(p(" " + "  ·  ".join(f"{counts[s]} {s}" for s in SEVERITIES if counts[s]), "1"))
 
