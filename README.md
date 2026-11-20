@@ -7,6 +7,8 @@
 ![deps](https://img.shields.io/badge/dependencies-0-c77dff?labelColor=0b0f17)
 ![license](https://img.shields.io/badge/license-MIT-c77dff?labelColor=0b0f17)
 
+<p align="center"><img src="docs/demo.svg" width="100%" alt="panoptes running in a terminal"/></p>
+
 *Argus Panoptes, the hundred-eyed watchman of Greek myth, never slept with every eye at once.*
 
 ```text
