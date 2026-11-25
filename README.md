@@ -1,6 +1,6 @@
 # panoptes
 
-[![Part of Cryptid Security](https://img.shields.io/badge/part_of-Cryptid%20Security-00ff9c?style=flat-square&labelColor=0d1117)](https://github.com/cryptid-security)
+[![Part of Cryptid Security](https://img.shields.io/badge/part_of-Cryptid%20Security-c6922f?style=flat-square&labelColor=0c1411)](https://github.com/cryptid-security)
 
 **See every DNS lookup and outbound connection, the program behind each one, and which of them look like malware.** It reads TLS handshakes too, so a C2 server still using its RAT's default certificate is named, and so is a destination whose lookup went over DNS over HTTPS. That covers C2 beacons, domain-generation algorithms, DNS tunneling and exfiltration, RAT default ports, dynamic DNS, mining pools, and stealers phoning home. Its DNS trap works like ApateDNS: it can sinkhole every name for malware analysis, or forward normally and block only the names it flags. It needs nothing but Python's standard library.
 
